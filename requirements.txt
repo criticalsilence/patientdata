@@ -1,6 +1,6 @@
     python-telegram-bot==21.0
     firebase-admin==6.1.0
-    pandas==2.0.3  # Bu satırı değiştirdik
+    pandas>=2.2.2  # Bu satırı değiştirdik
     openpyxl==3.1.2
     python-dotenv==1.0.1
     google-generativeai==0.6.0
