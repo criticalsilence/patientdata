@@ -44,3 +44,4 @@ except requests.exceptions.RequestException as e:
     print(f"Ağ hatası veya API isteği gönderilirken hata oluştu: {e}")
 except Exception as e:
     print(f"Beklenmeyen bir hata oluştu: {e}")
+
