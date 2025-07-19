@@ -1,9 +1,9 @@
-    python-telegram-bot==21.0
+  python-telegram-bot==21.0
     firebase-admin==6.5.0
-    pandas==1.5.3
+    # pandas==1.5.3  # Bu satır ya silinmiş ya da başında # olmalı
     openpyxl==3.1.2
     python-dotenv==1.0.1
     google-generativeai==0.6.0
     gunicorn==22.0.0
-    Flask[async]==3.0.3 # Burayı değiştirdik!
+    Flask[async]==3.0.3 # Flask[async] olduğundan emin olun
     requests==2.32.3
