@@ -1,0 +1,18 @@
+    # Ortam değişkenleri dosyası (hassas bilgiler içerir)
+    .env
+
+    # Firebase servis hesabı anahtarı (hassas bilgiler içerir)
+    serviceAccountKey.json
+
+    # Excel dosyaları (hasta verileri)
+    *.xlsx
+    *.xls
+
+    # Python derleme önbellekleri
+    __pycache__/
+    *.pyc
+
+    # Sanal ortam klasörü (eğer kullanıyorsanız)
+    venv/
+    .venv/
+    
