@@ -54,6 +54,7 @@ if not FIREBASE_SERVICE_ACCOUNT_JSON:
 db = None
 
 def initialize_firebase():
+    """Firebase Admin SDK'yı başlatır ve Firestore istemcisini döndürür."""
     global db
     if db is None:
         try:
@@ -73,6 +74,7 @@ def initialize_firebase():
 gemini_model = None
 
 def initialize_gemini():
+    """Gemini API'yi başlatır."""
     global gemini_model
     if gemini_model is None:
         try:
@@ -89,6 +91,7 @@ def initialize_gemini():
 user_authenticated = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kullanıcı /start komutunu gönderdiğinde mesaj gönderir ve kimlik doğrulama başlatır."""
     user = update.effective_user
     user_authenticated[user.id] = False
     await update.message.reply_html(
@@ -96,6 +99,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def authenticate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kullanıcının girdiği şifreyi kontrol eder."""
     user = update.effective_user
     text = update.message.text
 
@@ -106,6 +110,7 @@ async def authenticate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Yanlış şifre. Lütfen tekrar deneyin.")
 
 async def handle_authenticated_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kimliği doğrulanmış kullanıcılardan gelen metin mesajlarını işler ve Gemini'ye iletir."""
     user_query = update.message.text
     gemini = initialize_gemini()
     db_client = initialize_firebase()
@@ -159,6 +164,7 @@ async def handle_authenticated_message(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("Üzgünüm, bir hata oluştu. Lütfen tekrar deneyin.")
 
 async def get_patients(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Firestore'dan hasta verilerini çeker ve gönderir."""
     user = update.effective_user
 
     if not user_authenticated.get(user.id):
@@ -190,6 +196,10 @@ async def get_patients(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Hasta verileri çekilirken bir hata oluştu. Lütfen tekrar deneyin.")
 
 async def general_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Komut olmayan metin mesajlarını işler.
+    Kullanıcının kimlik doğrulama durumuna göre farklı aksiyonlar alır.
+    """
     user_id = update.effective_user.id
 
     if not user_authenticated.get(user_id, False):
@@ -200,7 +210,6 @@ async def general_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- Flask Uygulaması ve PTB Application Nesnesi ---
 app = Flask(__name__)
-# PTB Application nesnesini global olarak tanımlıyoruz
 application: Application = None # Global application nesnesi
 
 @app.route('/')
@@ -210,15 +219,18 @@ def hello():
 @app.route('/webhook', methods=['POST'])
 async def webhook():
     """Telegram'dan gelen webhook güncellemelerini işler."""
-    # Global application nesnesini kullan
     if application is None:
         logger.error("Telegram Application instance not initialized for webhook.")
         return "Error: Bot not initialized", 500
 
-    if request.method == "POST":
-        # Telegram güncellemesini işle
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
+    # Telegram'dan gelen JSON verisini al
+    json_data = request.get_json(force=True)
+    
+    # Güncellemeyi Application nesnesine işle
+    # Bu, Flask'ın async desteğine ihtiyaç duymadan çalışmalı
+    # process_update metodu doğrudan çağrılabilir
+    await application.process_update(Update.de_json(json_data, application.bot))
+    
     return "ok"
 
 # Ana fonksiyon

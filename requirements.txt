@@ -4,5 +4,5 @@ openpyxl==3.1.2
 python-dotenv==1.0.1
 google-generativeai==0.6.0
 gunicorn==22.0.0
-Flask==3.0.3 # Flask[async] yerine tekrar Flask
+Flask==3.0.3
 requests==2.32.3
