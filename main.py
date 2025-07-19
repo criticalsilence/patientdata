@@ -2,11 +2,21 @@ import os
 import logging
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ApplicationBuilder,
+    CallbackContext,
+)
+from flask import Flask, request # Flask için import
 
 # Firebase Admin SDK için gerekli import'lar
 import firebase_admin
 from firebase_admin import credentials, firestore
+import json # JSON kütüphanesini ekle
 
 # Gemini API için gerekli import
 import google.generativeai as genai
@@ -24,8 +34,8 @@ logger = logging.getLogger(__name__)
 # --- YAPILANDIRMA AYARLARI ---
 # Telegram bot token'ını ortam değişkenlerinden alın
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# Firebase servis hesabı anahtarının yolu
-FIREBASE_SERVICE_ACCOUNT_KEY_PATH = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_PATH", "serviceAccountKey.json")
+# Firebase servis hesabı anahtarının JSON içeriği (dosya yolu yerine)
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON") # Yeni ortam değişkeni adı
 # Firestore koleksiyon adı (excel_to_firestore.py ile aynı olmalı)
 FIRESTORE_COLLECTION_NAME = 'hasta_bilgileri' # Daha önce kullandığınız isimle aynı olduğundan emin olun!
 # Bot için basit bir şifre (güvenli bir yerde saklayın!)
@@ -33,12 +43,19 @@ BOT_PASSWORD = os.getenv("BOT_PASSWORD", "sifre123") # Varsayılan şifre, .env'
 # Gemini API Anahtarı
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Eğer token veya API anahtarı yoksa hata verin
+# Render'dan alınacak webhook URL'si (Render otomatik olarak PORT'u ayarlar)
+PORT = int(os.environ.get('PORT', '8443')) # Render'ın atadığı portu kullan
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL') # Render'da bu ortam değişkenini ayarlayacağız
+
+# Eğer token veya API anahtarı veya Firebase JSON yoksa hata verin
 if not TELEGRAM_BOT_TOKEN:
     logger.error("TELEGRAM_BOT_TOKEN ortam değişkeni ayarlanmamış. Lütfen .env dosyasını kontrol edin.")
     exit(1)
 if not GEMINI_API_KEY:
     logger.error("GEMINI_API_KEY ortam değişkeni ayarlanmamış. Lütfen .env dosyasını kontrol edin ve bir API anahtarı alın.")
+    exit(1)
+if not FIREBASE_SERVICE_ACCOUNT_JSON: # Yeni kontrol
+    logger.error("FIREBASE_SERVICE_ACCOUNT_JSON ortam değişkeni ayarlanmamış. Lütfen Render'da Firebase servis hesabı JSON içeriğini ayarlayın.")
     exit(1)
 
 # --- Firebase Başlatma ---
@@ -48,18 +65,17 @@ def initialize_firebase():
     """Firebase Admin SDK'yı başlatır ve Firestore istemcisini döndürür."""
     global db
     if db is None:
-        if not os.path.exists(FIREBASE_SERVICE_ACCOUNT_KEY_PATH):
-            logger.error(f"Hata: Firebase servis hesabı anahtar dosyası bulunamadı: {FIREBASE_SERVICE_ACCOUNT_KEY_PATH}")
-            logger.error("Lütfen Firebase konsolundan 'serviceAccountKey.json' dosyasını indirin ve doğru yolu belirtin.")
-            return None
         try:
-            cred = credentials.Certificate(FIREBASE_SERVICE_ACCOUNT_KEY_PATH)
+            # Ortam değişkeninden JSON içeriğini oku
+            cred_json = json.loads(FIREBASE_SERVICE_ACCOUNT_JSON)
+            cred = credentials.Certificate(cred_json)
             firebase_admin.initialize_app(cred)
             db = firestore.client()
             logger.info("Firebase başarıyla başlatıldı.")
             return db
         except Exception as e:
             logger.error(f"Firebase başlatılırken bir hata oluştu: {e}")
+            logger.error("FIREBASE_SERVICE_ACCOUNT_JSON ortam değişkeninin doğru JSON formatında olduğundan emin olun.")
             return None
     return db
 
@@ -73,7 +89,6 @@ def initialize_gemini():
         try:
             genai.configure(api_key=GEMINI_API_KEY)
             # Metin tabanlı sorgular için uygun bir model seçin
-            # Hata: 'gemini-pro' bulunamadı. Yerine 'gemini-1.5-flash' kullanıyoruz.
             gemini_model = genai.GenerativeModel('gemini-1.5-flash')
             logger.info("Gemini API başarıyla başlatıldı.")
             return gemini_model
@@ -124,14 +139,12 @@ async def handle_authenticated_message(update: Update, context: ContextTypes.DEF
 
     try:
         # Tüm hasta verilerini çek (büyük veri setleri için optimize edilebilir)
-        # Şimdilik tüm veriyi çekiyoruz, daha sonra sadece ilgili veriyi çekmek için sorgular eklenebilir.
         docs = db_client.collection(FIRESTORE_COLLECTION_NAME).get()
         all_patient_data = []
         for doc in docs:
             all_patient_data.append(doc.to_dict())
 
         # Gemini'ye gönderilecek prompt'u oluştur
-        # Verileri kolay okunur bir string formatına dönüştürüyoruz
         data_string = ""
         for i, patient in enumerate(all_patient_data):
             data_string += f"Hasta {i+1}:\n"
@@ -154,10 +167,8 @@ async def handle_authenticated_message(update: Update, context: ContextTypes.DEF
         Cevap:
         """
 
-        # Gemini API'yi çağır
         response = gemini.generate_content(prompt)
 
-        # Gemini'den gelen yanıtı kullanıcıya gönder
         if response and response.candidates:
             await update.message.reply_text(response.candidates[0].content.parts[0].text)
         else:
@@ -223,28 +234,71 @@ async def general_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await handle_authenticated_message(update, context)
 
 
+# --- Flask Uygulaması ---
+# Flask uygulamasını oluştur (main fonksiyonunun dışında global olarak tanımlandı)
+app = Flask(__name__)
+
+# Telegram bot uygulama nesnesi (global olarak tanımlanır)
+# main() içinde oluşturulacak ve buraya atanacak
+application_instance = None # application yerine application_instance kullandık
+
+@app.route('/')
+def hello():
+    return "Telegram Hasta Botu çalışıyor!"
+
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    """Telegram'dan gelen webhook güncellemelerini işler."""
+    # Global application_instance'ı kullan
+    if application_instance is None:
+        logger.error("Telegram Application instance not initialized for webhook.")
+        return "Error: Bot not initialized", 500
+
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application_instance.bot)
+        await application_instance.process_update(update)
+    return "ok"
+
 # Ana fonksiyon
 def main() -> None:
     """Botu başlatır."""
+    global application_instance # Global değişkeni burada kullanacağımızı belirtiyoruz
+
     # Firebase'i başlat
     initialize_firebase()
     # Gemini'yi başlat
     initialize_gemini()
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # ApplicationBuilder ile bot uygulamasını oluştur
+    application_instance = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Komut işleyicilerini ekleyin
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("hastalar", get_patients))
+    application_instance.add_handler(CommandHandler("start", start))
+    application_instance.add_handler(CommandHandler("hastalar", get_patients))
 
     # Tüm komut olmayan metin mesajlarını işleyecek genel işleyici
-    # Bu handler, kimlik doğrulama mantığını kendi içinde yönetecek.
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, general_text_handler))
+    application_instance.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, general_text_handler))
 
-    # Botu çalıştırmaya başlayın (Polling modu)
-    logger.info("Bot başlatılıyor...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-    logger.info("Bot durduruldu.")
+    # Webhook URL'sini ayarla
+    if WEBHOOK_URL:
+        logger.info(f"Webhook URL'si ayarlanıyor: {WEBHOOK_URL}")
+        application_instance.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path="webhook", # Bu, WEBHOOK_URL'nin sonuna eklenecek yol
+            webhook_url=WEBHOOK_URL + "/webhook" # Telegram'a bildirilecek tam URL
+        )
+        logger.info("Bot webhook modunda çalışıyor.")
+    else:
+        logger.warning("WEBHOOK_URL ortam değişkeni ayarlanmamış. Bot polling modunda başlatılıyor (sadece yerel test için).")
+        application_instance.run_polling(allowed_updates=Update.ALL_TYPES)
+        logger.info("Bot polling modunda çalışıyor.")
 
+# Gunicorn'un Flask uygulamasını çalıştırması için ana giriş noktası
 if __name__ == "__main__":
+    # main() fonksiyonunu çağırarak botu başlat (webhook veya polling modunda)
+    # Bu kısım, Gunicorn tarafından çağrıldığında Flask uygulamasının çalışmasını sağlar.
+    # Eğer doğrudan 'python main.py' ile çalıştırırsanız, polling modu devreye girer.
+    # Render'da 'gunicorn main:app' komutu ile çalıştırılacak.
     main()
+

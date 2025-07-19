@@ -1,23 +1,11 @@
-import pandas as pd
+import openpyxl # openpyxl'i içe aktarın
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
 # --- YAPILANDIRMA AYARLARI ---
-# 1. Firebase Servis Hesabı Anahtarınızın Yolu
-#    Bu JSON dosyasını Firebase konsolundan indirdiniz.
-#    Dosyayı bu betiğin çalıştığı dizine yerleştirin veya tam yolunu belirtin.
-#    Örnek: 'C:/Users/KullaniciAdiniz/Downloads/serviceAccountKey.json'
 SERVICE_ACCOUNT_KEY_PATH = 'serviceAccountKey.json'
-
-# 2. Excel Dosyanızın Yolu
-#    Hasta datalarınızın olduğu Excel dosyasının tam yolu.
-#    Örnek: 'C:/Users/KullaniciAdiniz/Belgelerim/hasta_datalari.xlsx'
-EXCEL_FILE_PATH = 'data.xlsx'
-
-# 3. Firestore Koleksiyon Adı
-#    Verilerin aktarılacağı Firestore koleksiyonunun adı.
-#    Örnek: 'hasta_bilgileri'
+EXCEL_FILE_PATH = 'hasta_datalari.xlsx'
 FIRESTORE_COLLECTION_NAME = 'hasta_bilgileri'
 # -----------------------------
 
@@ -38,13 +26,31 @@ def initialize_firebase():
         print(f"Firebase başlatılırken bir hata oluştu: {e}")
         return None
 
-def read_excel_data(file_path):
-    """Excel dosyasını okur ve bir Pandas DataFrame döndürür."""
+def read_excel_data_without_pandas(file_path, header_row_index=1):
+    """
+    Excel dosyasını openpyxl kullanarak okur ve bir liste sözlük döndürür.
+    header_row_index: Başlıkların bulunduğu satırın 0-tabanlı indeksi.
+                      (Excel'de 2. satır ise, burası 1 olmalı)
+    """
     try:
-        # header=1 demek, 2. satırı başlık olarak kullan (Python'da indeks 0'dan başlar)
-        df = pd.read_excel(file_path, header=1)
-        print(f"'{file_path}' Excel dosyası başarıyla okundu. Toplam {len(df)} satır.")
-        return df
+        workbook = openpyxl.load_workbook(file_path)
+        sheet = workbook.active
+        
+        # Başlıkları oku
+        headers = [cell.value for cell in sheet[header_row_index + 1]] # Excel'de 2. satır (index 1) ise, +1 ekleriz.
+        
+        data_rows = []
+        # Veri satırlarını oku (başlık satırından sonra başla)
+        for row_index in range(header_row_index + 2, sheet.max_row + 1): # Başlık satırından sonraki satırdan başla
+            row_data = {}
+            for col_index, header in enumerate(headers):
+                cell_value = sheet.cell(row=row_index, column=col_index + 1).value
+                # Boş hücreleri None olarak kaydet
+                row_data[header] = cell_value if cell_value is not None else None
+            data_rows.append(row_data)
+
+        print(f"'{file_path}' Excel dosyası openpyxl ile başarıyla okundu. Toplam {len(data_rows)} satır.")
+        return data_rows
     except FileNotFoundError:
         print(f"Hata: Excel dosyası bulunamadı: {file_path}")
         return None
@@ -52,21 +58,14 @@ def read_excel_data(file_path):
         print(f"Excel dosyası okunurken bir hata oluştu: {e}")
         return None
 
-def upload_to_firestore(db_client, dataframe, collection_name):
-    """DataFrame'deki verileri Firestore'a yükler."""
+def upload_to_firestore(db_client, data_list, collection_name):
+    """Liste sözlükleri Firestore'a yükler."""
     print(f"Veriler '{collection_name}' koleksiyonuna aktarılıyor...")
     success_count = 0
     fail_count = 0
 
-    for index, row in dataframe.iterrows():
-        # Pandas DataFrame satırını bir Python sözlüğüne dönüştürür.
-        # NaN (Not a Number) değerleri None'a çevirerek Firestore'un kabul etmesini sağlar.
-        # Firestore, None değerlerini null olarak kaydeder.
-        data = row.where(pd.notnull(row), None).to_dict()
-
+    for index, data in enumerate(data_list):
         try:
-            # Her satırı yeni bir belge olarak Firestore'a ekler.
-            # Firestore otomatik olarak benzersiz bir belge ID'si oluşturacaktır.
             doc_ref = db_client.collection(collection_name).add(data)
             print(f"Satır {index+1} aktarıldı. Belge ID: {doc_ref[1].id}")
             success_count += 1
@@ -82,7 +81,9 @@ def upload_to_firestore(db_client, dataframe, collection_name):
 if __name__ == "__main__":
     db = initialize_firebase()
     if db:
-        df = read_excel_data(EXCEL_FILE_PATH)
-        if df is not None:
-            upload_to_firestore(db, df, FIRESTORE_COLLECTION_NAME)
+        # Başlıkların 2. satırda (0-tabanlı indeks 1) olduğunu varsayıyoruz.
+        # Eğer Excel'de başlıklar 1. satırda ise header_row_index=0 yapın.
+        data_to_upload = read_excel_data_without_pandas(EXCEL_FILE_PATH, header_row_index=1)
+        if data_to_upload is not None:
+            upload_to_firestore(db, data_to_upload, FIRESTORE_COLLECTION_NAME)
 
